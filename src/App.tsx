@@ -293,6 +293,7 @@ function App() {
         type="select-single"
         disableClick
         disableHover
+        selectColor="#000050"
         toSelect={state.lastShownState}
       />
     ),

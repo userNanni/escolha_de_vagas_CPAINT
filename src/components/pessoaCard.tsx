@@ -101,10 +101,9 @@ export const PessoaCard = memo(
       [onClose]
     );
 
-  
-    const personImageUrl = `src/assets/pessoas/${cardData.id}`;
+    const personImageUrl = `src/assets/pessoas/${cardData.classificacao}.png`;
     const omImageUrl = `src/assets/dom/${cardData.localidade}.png`;
-    const fallbackPersonImage = `src/assets/dom/${cardData.id}.png`;
+    const fallbackPersonImage = `src/assets/dom/${cardData.classificacao}.png`;
     const fallbackOmImage = `src/assets/dom/${cardData.localidade}.png`;
 
     return (
@@ -117,7 +116,7 @@ export const PessoaCard = memo(
         aria-modal="true"
         aria-labelledby="pessoa-card-title"
       >
-        <Card className="relative w-full h-full max-w-4xl max-h-80 bg-white shadow-2xl animate-in zoom-in-95 duration-300">
+        <Card className="relative w-full h-full max-w-[1400px] max-h-120 bg-white shadow-2xl animate-in zoom-in-95 duration-300">
           {showCloseButton && onClose && (
             <button
               onClick={onClose}
@@ -128,7 +127,7 @@ export const PessoaCard = memo(
             </button>
           )}
 
-          <CardContent className="grid grid-cols-8 grid-rows-1 items-center gap-6 px-6 h-full py-2">
+          <CardContent className="grid grid-cols-8 grid-rows-1 items-center gap-6 px-6 h-full py-">
             <div className="flex col-span-1 h-full items-center justify-center rounded-lg bg-gradient-to-br from-slate-100 to-slate-200 text-5xl font-bold text-slate-700 shadow-inner">
               <span className="drop-shadow-sm">{cardData.classificacao}</span>
             </div>
@@ -143,24 +142,30 @@ export const PessoaCard = memo(
             </div>
 
             <div
-              className={`flex-grow ${
-                cardData.show_om ? "col-span-3" : "col-span-5"
+              className={` grid grid-rows-3 ${
+                cardData.show_om ? "col-span-3" : "col-span-3"
               } space-y-2`}
             >
-              <h3
+              <div
                 id="pessoa-card-title"
-                className="text-4xl font-bold text-left text-slate-800 leading-tight"
+                className="row-span-2"
               >
-                Ten. {cardData.nome}
-              </h3>
-              {cardData.show_om && (
-                <div className="space-y-1">
-                  <p className="text-lg text-slate-600 font-medium">
-                    {cardData.localidade}
-                  </p>
-                  <p className="text-base text-slate-500">{cardData.estado}</p>
-                </div>
-              )}
+                <p className="text-4xl font-bold text-slate-700">Asp.</p>
+                <h3 className="text-6xl font-black text-left text-slate-900 leading-tight">{cardData.nome}</h3>
+              </div>
+              <div className="row-span-1">
+                {}
+                {cardData.show_om && (
+                  <div className="space-y-1">
+                    <p className="text-4xl text-slate-700 font-bold">
+                      {cardData.localidade}
+                    </p>
+                    <p className="text-base text-slate-500">
+                      {cardData.estado}
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
 
             {cardData.show_om && (
