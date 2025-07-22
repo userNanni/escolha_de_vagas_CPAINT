@@ -2,143 +2,325 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import supabase from "@/lib/supabase";
 import type { Pessoa } from "@/components/controllerTable";
 import Brazil from "@/components/Brazil/src/Brazil";
 import { PessoaCard } from "@/components/pessoaCard";
 import { VagasTable } from "@/components/vagasTable";
 import type { Escolha } from "@/components/vagasTable";
+import toast from 'react-hot-toast';
+
+// Constantes
+const TABLES = {
+  PESSOAS: 'pessoas',
+  VAGAS_STATUS: 'vagas_status'
+} as const;
+
+const CHANNELS = {
+  PESSOAS: 'pessoas_realtime_channel',
+  VAGAS: 'vagas_realtime_channel'
+} as const;
+
+// Tipos
+interface VagasStatusRaw {
+  om: string;
+  estado: string;
+  total_vagas: number;
+  chosen: number;
+}
+
+interface AppState {
+  pessoas: Pessoa[];
+  vagasStatus: Escolha[];
+  visibleCardData: Pessoa | null;
+  lastShownState: string | undefined;
+  isLoading: boolean;
+  error: string | null;
+}
+
+// Componente de Loading
+const LoadingScreen = () => (
+  <div className="grid h-screen w-screen place-items-center bg-slate-950">
+    <div className="text-center">
+      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
+      <p className="text-white">Carregando dados...</p>
+    </div>
+  </div>
+);
+
+// Componente de Erro
+const ErrorScreen = ({ error, onRetry }: { error: string; onRetry: () => void }) => (
+  <div className="grid h-screen w-screen place-items-center bg-slate-950">
+    <div className="text-center">
+      <p className="text-red-400 mb-4">Erro: {error}</p>
+      <button 
+        onClick={onRetry}
+        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+      >
+        Tentar Novamente
+      </button>
+    </div>
+  </div>
+);
 
 function App() {
-  const [pessoas, setPessoas] = useState<Pessoa[]>([]);
-  const [vagasStatus, setVagasStatus] = useState<Escolha[]>([]);
-  const [visibleCardData, setVisibleCardData] = useState<Pessoa | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  
-  const [lastShownState, setLastShownState] = useState<string | undefined>();
+  const [state, setState] = useState<AppState>({
+    pessoas: [],
+    vagasStatus: [],
+    visibleCardData: null,
+    lastShownState: undefined,
+    isLoading: true,
+    error: null
+  });
 
-  const fetchVagasStatus = async () => {
-    const { data: vagasStatusData, error: vagasError } = await supabase
-      .from("vagas_status")
+  // Refs para cleanup e controle de estado
+  const mountedRef = useRef(true);
+  const channelsRef = useRef<any[]>([]);
+
+  // Utilitário para updates seguros de estado
+  const safeSetState = useCallback((updater: (prev: AppState) => AppState) => {
+    if (mountedRef.current) {
+      setState(updater);
+    }
+  }, []);
+
+  // Função para buscar status das vagas
+  const fetchVagasStatus = useCallback(async (): Promise<Escolha[]> => {
+    const { data, error } = await supabase
+      .from(TABLES.VAGAS_STATUS)
       .select("om, estado, total_vagas, chosen")
       .order("estado", { ascending: true })
       .order("chosen", { ascending: false });
 
-    if (vagasError) {
-      console.error("Erro ao buscar status das vagas:", vagasError);
-    } else if (vagasStatusData) {
-      const formattedVagasStatus = vagasStatusData.map((item) => ({
-        id: item.om,
-        OM: item.om,
-        state: item.estado,
-        total: item.total_vagas,
-        chosen: item.chosen,
-      }));
-      setVagasStatus(formattedVagasStatus);
+    if (error) {
+      console.error("Erro ao buscar status das vagas:", error);
+      throw new Error(`Erro ao buscar vagas: ${error.message}`);
     }
-  };
 
-  useEffect(() => {
-    const fetchInitialData = async () => {
-      setIsLoading(true);
+    return (data as VagasStatusRaw[])?.map((item) => ({
+      id: item.om,
+      OM: item.om,
+      state: item.estado,
+      total: item.total_vagas,
+      chosen: item.chosen,
+    })) || [];
+  }, []);
 
-      const { data: cardData } = await supabase
-        .from("pessoas")
-        .select("*")
-        .eq("show_card", true)
-        .eq("hide_card", false)
-        .limit(1)
-        .single();
-      
-      if (cardData) {
-        setVisibleCardData(cardData);
-        setLastShownState(cardData.estado);
-        console.log("Card visível:", cardData.estado);
-      }
+  // Função para buscar card visível
+  const fetchVisibleCard = useCallback(async (): Promise<{ cardData: Pessoa | null; lastState?: string }> => {
+    const { data, error } = await supabase
+      .from(TABLES.PESSOAS)
+      .select("*")
+      .eq("show_card", true)
+      .eq("hide_card", false)
+      .limit(1)
+      .single();
 
-      await Promise.all([
+    if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
+      console.error("Erro ao buscar card:", error);
+      throw new Error(`Erro ao buscar card: ${error.message}`);
+    }
+
+    return {
+      cardData: data || null,
+      lastState: data?.estado
+    };
+  }, []);
+
+  // Função para buscar todas as pessoas
+  const fetchPessoas = useCallback(async (): Promise<Pessoa[]> => {
+    const { data, error } = await supabase
+      .from(TABLES.PESSOAS)
+      .select("*")
+      .order('id', { ascending: true });
+
+    if (error) {
+      console.error("Erro ao buscar pessoas:", error);
+      throw new Error(`Erro ao buscar pessoas: ${error.message}`);
+    }
+
+    return data || [];
+  }, []);
+
+  // Função para carregar dados iniciais
+  const loadInitialData = useCallback(async () => {
+    safeSetState(prev => ({ ...prev, isLoading: true, error: null }));
+
+    try {
+      const [vagasData, cardResult, pessoasData] = await Promise.all([
         fetchVagasStatus(),
-        supabase.from("pessoas").select("*").then(({ data, error }) => {
-          if (error) console.error("Erro ao buscar pessoas:", error);
-          else setPessoas(data || []);
-        }),
+        fetchVisibleCard(),
+        fetchPessoas()
       ]);
 
-      setIsLoading(false);
-    };
+      safeSetState(prev => ({
+        ...prev,
+        vagasStatus: vagasData,
+        visibleCardData: cardResult.cardData,
+        lastShownState: cardResult.lastState,
+        pessoas: pessoasData,
+        isLoading: false,
+        error: null
+      }));
 
-    fetchInitialData();
-  }, []);
+      if (cardResult.lastState) {
+        console.log("Card visível:", cardResult.lastState);
+      }
 
-  
-  useEffect(() => {
-    const channel = supabase
-      .channel("pessoas_realtime_channel")
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
+      console.error("Erro ao carregar dados iniciais:", error);
+      
+      safeSetState(prev => ({
+        ...prev,
+        isLoading: false,
+        error: errorMessage
+      }));
+      
+      toast.error(`Erro ao carregar dados: ${errorMessage}`);
+    }
+  }, [fetchVagasStatus, fetchVisibleCard, fetchPessoas, safeSetState]);
+
+  // Handler para mudanças em tempo real das pessoas
+  const handlePessoasRealtimeChange = useCallback(async (payload: any) => {
+    if (!mountedRef.current) return;
+
+    const newPessoa = payload.new as Pessoa;
+    const oldPessoaId = payload.old?.id;
+
+    // Atualiza lista de pessoas
+    safeSetState(prev => {
+      let updatedPessoas = [...prev.pessoas];
+
+      switch (payload.eventType) {
+        case 'INSERT':
+          if (!updatedPessoas.some(p => p.id === newPessoa.id)) {
+            updatedPessoas.push(newPessoa);
+            updatedPessoas.sort((a, b) => a.id - b.id);
+          }
+          break;
+        case 'UPDATE':
+          updatedPessoas = updatedPessoas.map(p => p.id === newPessoa.id ? newPessoa : p);
+          break;
+        case 'DELETE':
+          updatedPessoas = updatedPessoas.filter(p => p.id !== oldPessoaId);
+          break;
+      }
+
+      // Atualiza card visível
+      let updatedVisibleCard = prev.visibleCardData;
+      let updatedLastState = prev.lastShownState;
+
+      if (newPessoa) {
+        if (newPessoa.show_card && !newPessoa.show_om) {
+          updatedLastState = undefined
+        }
+        if (updatedVisibleCard && newPessoa.id === updatedVisibleCard.id) {
+          updatedVisibleCard = newPessoa.show_card && !newPessoa.hide_card ? newPessoa : null;
+        }
+        else if (newPessoa.show_card && !newPessoa.hide_card) {
+          updatedVisibleCard = newPessoa;
+        }
+
+        if (newPessoa.show_om) {
+          updatedLastState = newPessoa.estado;
+        }
+      }
+
+      return {
+        ...prev,
+        pessoas: updatedPessoas,
+        visibleCardData: updatedVisibleCard,
+        lastShownState: updatedLastState
+      };
+    });
+
+    try {
+      const updatedVagas = await fetchVagasStatus();
+      safeSetState(prev => ({ ...prev, vagasStatus: updatedVagas }));
+    } catch (error) {
+      console.error("Erro ao atualizar vagas:", error);
+    }
+  }, [fetchVagasStatus, safeSetState]);
+
+  const setupRealtimeSubscriptions = useCallback(() => {
+    channelsRef.current.forEach(channel => {
+      supabase.removeChannel(channel);
+    });
+    channelsRef.current = [];
+
+    const pessoasChannel = supabase
+      .channel(CHANNELS.PESSOAS)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "pessoas" },
-        (payload) => {
-          const newPessoa = payload.new as Pessoa;
-          const oldPessoaId = payload.old?.id;
-
-          if (payload.eventType === 'INSERT') {
-            setPessoas((current) => [...current, newPessoa]);
-          }
-          if (payload.eventType === 'UPDATE') {
-            setPessoas((current) => current.map((p) => (p.id === newPessoa.id ? newPessoa : p)));
-          }
-          if (payload.eventType === 'DELETE') {
-            setPessoas((current) => current.filter((p) => p.id !== oldPessoaId));
-          }
-
-          setVisibleCardData(currentVisibleCard => {
-            if (newPessoa && currentVisibleCard && newPessoa.id === currentVisibleCard.id) {
-              return newPessoa.show_card && !newPessoa.hide_card ? newPessoa : null;
-            }
-            if (newPessoa?.show_card && !newPessoa?.hide_card) {
-              return newPessoa;
-            }
-            return currentVisibleCard;
-          });
-
-          if (newPessoa?.show_card && !newPessoa?.hide_card) {
-            setLastShownState(newPessoa.estado);
-          }
-          fetchVagasStatus();
-        }
+        { event: "*", schema: "public", table: TABLES.PESSOAS },
+        handlePessoasRealtimeChange
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log(`Pessoas realtime status: ${status}`);
+        if (status === 'CHANNEL_ERROR') {
+          toast.error('Erro na conexão em tempo real');
+        }
+      });
+
+    channelsRef.current.push(pessoasChannel);
+  }, [handlePessoasRealtimeChange]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    
+    loadInitialData();
+    setupRealtimeSubscriptions();
 
     return () => {
-      supabase.removeChannel(channel);
+      mountedRef.current = false;
+      channelsRef.current.forEach(channel => {
+        supabase.removeChannel(channel);
+      });
+      channelsRef.current = [];
     };
-  }, []);
+  }, [loadInitialData, setupRealtimeSubscriptions]);
+
+  const brazilComponent = useMemo(() => (
+    <Brazil 
+      size={800} 
+      type="select-single" 
+      disableClick 
+      disableHover 
+      toSelect={state.lastShownState} 
+    />
+  ), [state.lastShownState]);
+
+  const handleRetry = useCallback(() => {
+    loadInitialData();
+  }, [loadInitialData]);
+
+  if (state.error) {
+    return <ErrorScreen error={state.error} onRetry={handleRetry} />;
+  }
+
+  if (state.isLoading) {
+    return <LoadingScreen />;
+  }
 
   return (
     <div className="grid h-screen w-screen grid-cols-2 items-center justify-center gap-8 p-8 bg-slate-950">
-      
       <div className="justify-self-center">
-        <Brazil 
-          size={800} 
-          type="select-single" 
-          disableClick 
-          disableHover 
-          toSelect={lastShownState} 
-        />
+        {brazilComponent}
       </div>
 
       <div className="flex flex-col w-full max-w-2xl justify-self-center gap-8">
         <div>
-            <h2 className="text-2xl font-bold text-white text-center mb-4">Quadro de Vagas</h2>
-            <VagasTable data={vagasStatus} isLoading={isLoading} />
+          <h2 className="text-2xl font-bold text-white text-center mb-4">
+            Quadro de Vagas
+          </h2>
+          <VagasTable data={state.vagasStatus} isLoading={false} />
         </div>
       </div>
 
-      {visibleCardData && (
-        <PessoaCard 
-          cardData={visibleCardData}
-        />
+      {state.visibleCardData && (
+        <PessoaCard cardData={state.visibleCardData} />
       )}
     </div>
   );

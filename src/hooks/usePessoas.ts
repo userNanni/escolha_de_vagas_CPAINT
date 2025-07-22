@@ -2,122 +2,228 @@
 
 "use client";
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import supabase from '@/lib/supabase';
 import toast from 'react-hot-toast';
-import type { Pessoa } from "@/components/controllerTable"; // Importando o tipo
+import type { Pessoa } from "@/components/controllerTable";
 
-// Constantes para evitar erros de digitação e facilitar a manutenção
+// Constantes para configuração
 const TABLE_NAME = 'pessoas';
 const CHANNEL_NAME = 'realtime-pessoas';
+const RETRY_ATTEMPTS = 3;
+const RETRY_DELAY = 1000;
+
+// Tipos para melhor tipagem
+type UpdateField = keyof Pessoa;
+type UpdateValue = string | number | boolean;
+
+interface UseSupabaseError extends Error {
+  code?: string;
+  details?: string;
+}
+
+// Utilitário para delay
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Utilitário para retry com backoff exponencial
+const retryWithBackoff = async <T>(
+  fn: () => Promise<T>,
+  attempts: number = RETRY_ATTEMPTS,
+  delayMs: number = RETRY_DELAY
+): Promise<T> => {
+  try {
+    return await fn();
+  } catch (error) {
+    if (attempts <= 1) throw error;
+    
+    await delay(delayMs);
+    return retryWithBackoff(fn, attempts - 1, delayMs * 2);
+  }
+};
 
 export function usePessoas() {
   const [pessoas, setPessoas] = useState<Pessoa[]>([]);
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  
+  // Refs para evitar stale closures e memory leaks
+  const channelRef = useRef<any>(null);
+  const mountedRef = useRef(true);
 
-  useEffect(() => {
-    // 1. Busca os dados iniciais ao carregar o componente
-    async function fetchInitialPessoas() {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from(TABLE_NAME)
-        .select('*')
-        .order('id', { ascending: true });
+  // Função para buscar dados iniciais com retry
+  const fetchInitialPessoas = useCallback(async () => {
+    if (!mountedRef.current) return;
+    
+    setLoading(true);
+    setError(null);
 
-      if (error) {
-        console.error('Erro ao buscar pessoas:', error);
-        toast.error(`Não foi possível carregar os dados: ${error.message}`);
-      } else if (data) {
-        setPessoas(data);
+    try {
+      const { data, error } = await retryWithBackoff(async () => {
+        const result = await supabase
+          .from(TABLE_NAME)
+          .select('*')
+          .order('id', { ascending: true });
+        
+        if (result.error) throw result.error;
+        return result;
+      });
+
+      if (mountedRef.current) {
+        if (data) {
+          setPessoas(data);
+        }
       }
-      setLoading(false);
+    } catch (err) {
+      const error = err as UseSupabaseError;
+      console.error('Erro ao buscar pessoas:', error);
+      
+      if (mountedRef.current) {
+        const errorMessage = error.message || 'Erro desconhecido';
+        setError(errorMessage);
+        toast.error(`Não foi possível carregar os dados: ${errorMessage}`);
+      }
+    } finally {
+      if (mountedRef.current) {
+        setLoading(false);
+      }
+    }
+  }, []);
+
+  // Handler para mudanças em tempo real
+  const handleRealtimeChange = useCallback((payload: any) => {
+    if (!mountedRef.current) return;
+
+    console.log('Mudança em tempo real recebida:', payload);
+    const { eventType, new: newRecord, old: oldRecord } = payload;
+
+    setPessoas((current) => {
+      switch (eventType) {
+        case 'INSERT':
+          // Evita duplicatas
+          if (current.some(p => p.id === newRecord.id)) {
+            return current;
+          }
+          return [...current, newRecord].sort((a, b) => a.id - b.id);
+
+        case 'UPDATE':
+          return current.map((p) => 
+            p.id === newRecord.id ? { ...p, ...newRecord } : p
+          );
+
+        case 'DELETE':
+          if (oldRecord && 'id' in oldRecord) {
+            return current.filter((p) => p.id !== oldRecord.id);
+          }
+          return current;
+
+        default:
+          return current;
+      }
+    });
+  }, []);
+
+  // Setup do realtime subscription
+  const setupRealtimeSubscription = useCallback(() => {
+    // Remove subscription anterior se existir
+    if (channelRef.current) {
+      supabase.removeChannel(channelRef.current);
     }
 
-    fetchInitialPessoas();
-
-    // 2. Se inscreve para receber atualizações em tempo real
-    const channel = supabase
+    channelRef.current = supabase
       .channel(CHANNEL_NAME)
       .on<Pessoa>(
         'postgres_changes',
         { event: '*', schema: 'public', table: TABLE_NAME },
-        (payload) => {
-          console.log('Mudança em tempo real recebida!', payload);
-          const { eventType, new: newRecord, old: oldRecord } = payload;
-
-          // Usando um switch para lidar com os diferentes tipos de eventos
-          switch (eventType) {
-            case 'INSERT':
-              setPessoas((current) => [...current, newRecord]);
-              break;
-            case 'UPDATE':
-              setPessoas((current) =>
-                current.map((p) => (p.id === newRecord.id ? { ...p, ...newRecord } : p))
-              );
-              break;
-            case 'DELETE':
-              // Garante que o 'old' payload tem um ID antes de filtrar
-              if ('id' in oldRecord) {
-                setPessoas((current) => current.filter((p) => p.id !== oldRecord.id));
-              }
-              break;
-            default:
-              break;
-          }
-        }
+        handleRealtimeChange
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('Status da subscription:', status);
+        
+        if (status === 'SUBSCRIBED') {
+          console.log('Conectado ao realtime');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('Erro na conexão realtime');
+          toast.error('Erro na conexão em tempo real');
+        }
+      });
+  }, [handleRealtimeChange]);
 
-    // 3. Limpa a inscrição ao desmontar o componente para evitar memory leaks
+  // Effect principal
+  useEffect(() => {
+    mountedRef.current = true;
+    
+    fetchInitialPessoas();
+    setupRealtimeSubscription();
+
     return () => {
-      supabase.removeChannel(channel);
+      mountedRef.current = false;
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
     };
-  }, []); // Array de dependências vazio garante que o useEffect rode apenas uma vez
+  }, [fetchInitialPessoas, setupRealtimeSubscription]);
 
-  // Função de atualização com lógica de "Update Otimista"
+  // Função de atualização otimizada
   const handleUpdatePessoa = useCallback(async (
     id: number,
-    field: keyof Pessoa,
-    value: string | number | boolean
+    field: UpdateField,
+    value: UpdateValue
   ) => {
+    if (!mountedRef.current || updatingId === id) return;
+
     setUpdatingId(id);
 
-    // Guarda o estado atual para reverter em caso de erro
-    const oldPessoas = [...pessoas];
-    
-    // Cria o novo estado "otimista" e atualiza a UI imediatamente
-    const optimisticData = pessoas.map((p) =>
+    // Update otimista
+    const previousPessoas = pessoas;
+    const optimisticUpdate = pessoas.map((p) =>
       p.id === id ? { ...p, [field]: value } : p
     );
-    setPessoas(optimisticData);
+    setPessoas(optimisticUpdate);
 
     try {
-      // Envia a requisição de update para o Supabase
-      const { error } = await supabase
-        .from(TABLE_NAME)
-        .update({ [field]: value })
-        .eq('id', id);
+      const { error } = await retryWithBackoff(async () => {
+        const result = await supabase
+          .from(TABLE_NAME)
+          .update({ [field]: value })
+          .eq('id', id);
+        
+        if (result.error) throw result.error;
+        return result;
+      });
 
-      // Se a API retornar um erro, lança para o bloco catch
-      if (error) {
-        throw error;
-      }
-      // Sucesso! Não precisamos fazer nada, a UI já está atualizada.
-      // O evento de real-time vai chegar e "confirmar" o estado, sem mudanças visíveis.
-
-    } catch (error: Error | any) {
-      console.error('Falha na atualização:', error);
-      toast.error(`Falha ao atualizar: ${error.message}`);
+      // Sucesso - o realtime vai confirmar a mudança
       
-      // Se deu erro, reverte a UI para o estado anterior à mudança
-      setPessoas(oldPessoas);
+    } catch (err) {
+      const error = err as UseSupabaseError;
+      console.error('Falha na atualização:', error);
+      
+      if (mountedRef.current) {
+        // Reverte para o estado anterior
+        setPessoas(previousPessoas);
+        
+        const errorMessage = error.message || 'Erro desconhecido';
+        toast.error(`Falha ao atualizar: ${errorMessage}`);
+      }
     } finally {
-      // Para o indicador de loading da linha específica
-      setUpdatingId(null);
+      if (mountedRef.current) {
+        setUpdatingId(null);
+      }
     }
-  }, [pessoas]); // `useCallback` depende de `pessoas` para ter sempre a lista mais recente
+  }, [pessoas, updatingId]);
 
-  // Retorna os estados e a função para o componente usar
-  return { pessoas, loading, updatingId, handleUpdatePessoa };
+  // Função para retry manual
+  const retry = useCallback(() => {
+    fetchInitialPessoas();
+  }, [fetchInitialPessoas]);
+
+  return { 
+    pessoas, 
+    loading, 
+    error,
+    updatingId, 
+    handleUpdatePessoa,
+    retry
+  };
 }
