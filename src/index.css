@@ -9,6 +9,28 @@
 .flash-update {
   animation: flash 1.5s ease-out;
 }
+
+/* globals.css - Adicione essas otimizações */
+.virtual-table-container {
+  /* Otimizações de performance para scroll */
+  will-change: transform;
+  transform: translateZ(0);
+  
+  /* Suavização do scroll */
+  scroll-behavior: smooth;
+  
+  /* Otimização de repaint */
+  contain: layout style paint;
+}
+
+.virtual-table-row {
+  /* Evita reflow durante animações */
+  will-change: transform;
+  
+  /* Otimização de composite layers */
+  transform: translateZ(0);
+}
+
 /* 
 @custom-variant dark (&:is(.dark *));
 
