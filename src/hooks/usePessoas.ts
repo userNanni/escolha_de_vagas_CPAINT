@@ -7,13 +7,11 @@ import supabase from '@/lib/supabase';
 import toast from 'react-hot-toast';
 import type { Pessoa } from "@/components/controllerTable";
 
-// Constantes para configuração
 const TABLE_NAME = 'pessoas';
 const CHANNEL_NAME = 'realtime-pessoas';
 const RETRY_ATTEMPTS = 3;
 const RETRY_DELAY = 1000;
 
-// Tipos para melhor tipagem
 type UpdateField = keyof Pessoa;
 type UpdateValue = string | number | boolean;
 
@@ -21,11 +19,8 @@ interface UseSupabaseError extends Error {
   code?: string;
   details?: string;
 }
-
-// Utilitário para delay
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Utilitário para retry com backoff exponencial
 const retryWithBackoff = async <T>(
   fn: () => Promise<T>,
   attempts: number = RETRY_ATTEMPTS,
@@ -47,11 +42,9 @@ export function usePessoas() {
   const [updatingId, setUpdatingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   
-  // Refs para evitar stale closures e memory leaks
   const channelRef = useRef<any>(null);
   const mountedRef = useRef(true);
 
-  // Função para buscar dados iniciais com retry
   const fetchInitialPessoas = useCallback(async () => {
     if (!mountedRef.current) return;
     
@@ -90,7 +83,6 @@ export function usePessoas() {
     }
   }, []);
 
-  // Handler para mudanças em tempo real
   const handleRealtimeChange = useCallback((payload: any) => {
     if (!mountedRef.current) return;
 
@@ -100,7 +92,6 @@ export function usePessoas() {
     setPessoas((current) => {
       switch (eventType) {
         case 'INSERT':
-          // Evita duplicatas
           if (current.some(p => p.id === newRecord.id)) {
             return current;
           }
@@ -123,9 +114,7 @@ export function usePessoas() {
     });
   }, []);
 
-  // Setup do realtime subscription
   const setupRealtimeSubscription = useCallback(() => {
-    // Remove subscription anterior se existir
     if (channelRef.current) {
       supabase.removeChannel(channelRef.current);
     }
@@ -149,7 +138,6 @@ export function usePessoas() {
       });
   }, [handleRealtimeChange]);
 
-  // Effect principal
   useEffect(() => {
     mountedRef.current = true;
     
@@ -165,7 +153,6 @@ export function usePessoas() {
     };
   }, [fetchInitialPessoas, setupRealtimeSubscription]);
 
-  // Função de atualização otimizada
   const handleUpdatePessoa = useCallback(async (
     id: number,
     field: UpdateField,
@@ -175,7 +162,6 @@ export function usePessoas() {
 
     setUpdatingId(id);
 
-    // Update otimista
     const previousPessoas = pessoas;
     const optimisticUpdate = pessoas.map((p) =>
       p.id === id ? { ...p, [field]: value } : p
@@ -193,14 +179,12 @@ export function usePessoas() {
         return result;
       });
 
-      // Sucesso - o realtime vai confirmar a mudança
       
     } catch (err) {
       const error = err as UseSupabaseError;
       console.error('Falha na atualização:', error);
       
       if (mountedRef.current) {
-        // Reverte para o estado anterior
         setPessoas(previousPessoas);
         
         const errorMessage = error.message || 'Erro desconhecido';
@@ -213,7 +197,6 @@ export function usePessoas() {
     }
   }, [pessoas, updatingId]);
 
-  // Função para retry manual
   const retry = useCallback(() => {
     fetchInitialPessoas();
   }, [fetchInitialPessoas]);

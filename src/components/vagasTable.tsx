@@ -1,10 +1,20 @@
 "use client";
 
-import { flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  flexRender,
+  getCoreRowModel,
+  useReactTable,
+} from "@tanstack/react-table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { columns } from "@/lib/vagas";
 import { useEffect } from "react";
-
 
 export type Escolha = {
   id: string;
@@ -26,8 +36,7 @@ export function VagasTable({ data, isLoading }: VagasTableProps) {
     getCoreRowModel: getCoreRowModel(),
   });
 
-  useEffect(() => {
-  }, [data]);
+  useEffect(() => {}, [data]);
 
   if (isLoading) {
     return (
@@ -45,7 +54,12 @@ export function VagasTable({ data, isLoading }: VagasTableProps) {
             <TableRow key={headerGroup.id}>
               {headerGroup.headers.map((header) => (
                 <TableHead key={header.id}>
-                  {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                  {header.isPlaceholder
+                    ? null
+                    : flexRender(
+                        header.column.columnDef.header,
+                        header.getContext()
+                      )}
                 </TableHead>
               ))}
             </TableRow>
@@ -56,8 +70,9 @@ export function VagasTable({ data, isLoading }: VagasTableProps) {
             table.getRowModel().rows.map((row) => (
               <TableRow key={row.id}>
                 {row.getVisibleCells().map((cell) => (
-                  <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-
+                  <TableCell key={cell.id}>
+                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                  </TableCell>
                 ))}
               </TableRow>
             ))
