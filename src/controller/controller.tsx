@@ -1,63 +1,41 @@
+// src/app/controller/page.tsx
+
 "use client";
 
-import { ControllerTable, type Pessoa } from "@/components/controllerTable";
-import supabase from "@/lib/supabase";
-import { useEffect, useState } from "react";
-
+import { ControllerTable } from "@/components/controllerTable";
+import { usePessoas } from "@/hooks/usePessoas"; // 1. Importa o hook
+import { Toaster } from 'react-hot-toast';
 
 export default function ControllerPage() {
-  const [pessoas, setPessoas] = useState<Pessoa[]>([]);
-  const [loading, setLoading] = useState(true);
+  // 2. Usa o hook para obter toda a lógica, estado e funções
+  const { pessoas, loading, updatingId, handleUpdatePessoa } = usePessoas();
 
-  useEffect(() => {
-    async function fetchPessoas() {
-      const { data, error } = await supabase.from("pessoas").select("*").order("classificacao", { ascending: true });
-
-      if (error) {
-        console.error("Erro ao buscar pessoas:", error);
-      } else if (data) {
-        setPessoas(data);
-      }
-      setLoading(false);
-    }
-    fetchPessoas();
-  }, []);
-
-  const handleUpdatePessoa = async (
-    id: number,
-    field: keyof Pessoa,
-    value: string | number | boolean
-  ) => {
-    setPessoas((currentPessoas) =>
-      currentPessoas.map((pessoa) =>
-        pessoa.id === id ? { ...pessoa, [field]: value } : pessoa
-      )
-    );
-
-    const { error } = await supabase
-      .from("pessoas")
-      .update({ [field]: value })
-      .eq("id", id);
-
-    if (error) {
-      console.error(`Erro ao atualizar o campo ${String(field)}:`, error);
-    }
-  };
-
+  // O estado de loading é gerenciado pelo hook
   if (loading) {
     return (
       <div className="grid h-screen w-screen place-items-center bg-slate-950">
-        <p className="text-white">Carregando controles...</p> 
+        <p className="text-white">Carregando controles...</p>
       </div>
     );
   }
 
+  // 3. O JSX permanece o mesmo, mas agora é mais limpo e declarativo
   return (
-    <div className="grid h-screen w-screen place-items-center bg-slate-950 p-8">
-      <div className="bg-white justify-self-center p-8 rounded-lg w-full max-w-4xl h-full overflow-auto">
-        <h1 className="text-2xl font-bold mb-4">Painel de Controle de Pessoas</h1>
-        <ControllerTable data={pessoas} onUpdate={handleUpdatePessoa} />
+    <>
+      <Toaster position="top-right" />
+     
+      <div className="grid min-h-screen w-full place-items-center bg-slate-950 p-4 md:p-8">
+        <div className="bg-white justify-self-center p-4 md:p-8 rounded-lg w-full max-w-5xl h-[90vh] flex flex-col">
+          <h1 className="text-2xl font-bold mb-4 shrink-0">Painel de Controle de Pessoas</h1>
+          <div className="overflow-auto w-full h-full">
+            <ControllerTable
+              data={pessoas}
+              onUpdate={handleUpdatePessoa}
+              updatingId={updatingId}
+            />
+          </div>
+        </div>
       </div>
-    </div>
+    </>
   );
 }

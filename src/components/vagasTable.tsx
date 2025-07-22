@@ -3,6 +3,8 @@
 import { flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { columns } from "@/lib/vagas";
+import { useEffect } from "react";
+
 
 export type Escolha = {
   id: string;
@@ -14,14 +16,26 @@ export type Escolha = {
 
 interface VagasTableProps {
   data: Escolha[];
+  isLoading?: boolean;
 }
 
-export function VagasTable({ data }: VagasTableProps) {
+export function VagasTable({ data, isLoading }: VagasTableProps) {
   const table = useReactTable({
     data,
     columns,
     getCoreRowModel: getCoreRowModel(),
   });
+
+  useEffect(() => {
+  }, [data]);
+
+  if (isLoading) {
+    return (
+      <div className="grid h-screen w-screen place-items-center bg-slate-950">
+        <p className="text-white">Carregando dados das vagas...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-md border bg-white">

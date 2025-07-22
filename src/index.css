@@ -1,5 +1,14 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+
+@keyframes flash {
+  0% { background-color: rgba(74, 222, 128, 0.5); } /* Verde claro semi-transparente */
+  100% { background-color: transparent; }
+}
+
+.flash-update {
+  animation: flash 1.5s ease-out;
+}
 /* 
 @custom-variant dark (&:is(.dark *));
 
