@@ -101,9 +101,9 @@ export const PessoaCard = memo(
       [onClose]
     );
 
-    const personImageUrl = `src/assets/pessoas/${cardData.classificacao}.png`;
+    const personImageUrl = `src/assets/pessoas/${cardData.classificacao}.jpg`;
     const omImageUrl = `src/assets/dom/${cardData.localidade}.png`;
-    const fallbackPersonImage = `src/assets/dom/${cardData.classificacao}.png`;
+    const fallbackPersonImage = `src/assets/pessoas/${cardData.classificacao}.jpg`;
     const fallbackOmImage = `src/assets/dom/${cardData.localidade}.png`;
 
     return (
@@ -129,7 +129,7 @@ export const PessoaCard = memo(
 
           <CardContent className="grid grid-cols-8 grid-rows-1 items-center gap-6 px-6 h-full py-">
             <div className="flex col-span-1 h-full items-center justify-center rounded-lg bg-gradient-to-br from-slate-100 to-slate-200 text-5xl font-bold text-slate-700 shadow-inner">
-              <span className="drop-shadow-sm">{cardData.classificacao}</span>
+              <span className="drop-shadow-sm">{cardData.classificacao}{"º"}</span>
             </div>
 
             <div className="col-span-2 h-full">

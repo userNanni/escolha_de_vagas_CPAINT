@@ -37,22 +37,124 @@ interface BatchUpdate {
   fields: Partial<Pessoa>;
 }
 
+interface RetryOptions {
+  attempts?: number;
+  initialDelay?: number;
+  maxDelay?: number;
+  backoffFactor?: number;
+  retryCondition?: (error: any) => boolean;
+  onRetry?: (error: any, attempt: number) => void;
+}
+
 // Utilitários
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Versão melhorada do retryWithBackoff
 const retryWithBackoff = async <T>(
   fn: () => Promise<T>,
-  attempts: number = RETRY_ATTEMPTS,
-  delayMs: number = RETRY_DELAY
+  options: RetryOptions = {}
 ): Promise<T> => {
-  try {
-    return await fn();
-  } catch (error) {
-    if (attempts <= 1) throw error;
-    
-    await delay(delayMs);
-    return retryWithBackoff(fn, attempts - 1, delayMs * 2);
+  const {
+    attempts = RETRY_ATTEMPTS,
+    initialDelay = RETRY_DELAY,
+    maxDelay = 30000, // 30 segundos máximo
+    backoffFactor = 2,
+    retryCondition = () => true,
+    onRetry
+  } = options;
+
+  let lastError: any;
+  let currentDelay = initialDelay;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+
+      // Se é a última tentativa, lança o erro
+      if (attempt === attempts) {
+        throw error;
+      }
+
+      // Verifica se deve tentar novamente
+      if (!retryCondition(error)) {
+        throw error;
+      }
+
+      // Callback para logging/monitoramento
+      if (onRetry) {
+        onRetry(error, attempt);
+      }
+
+      // Aguarda antes da próxima tentativa
+      await delay(Math.min(currentDelay, maxDelay));
+
+      // Aumenta o delay para a próxima tentativa
+      currentDelay *= backoffFactor;
+    }
   }
+
+  throw lastError;
+};
+
+// Versão específica para erros de rede/Supabase
+const retrySupabaseOperation = async <T>(
+  fn: () => Promise<T>,
+  customOptions: Partial<RetryOptions> = {}
+): Promise<T> => {
+  const defaultOptions: RetryOptions = {
+    attempts: 3,
+    initialDelay: 1000,
+    maxDelay: 10000,
+    backoffFactor: 2,
+    retryCondition: (error) => {
+      // Retry apenas para erros específicos
+      if (error?.code) {
+        // Códigos que indicam problemas temporários
+        const retryableCodes = [
+          'PGRST301', // Connection timeout
+          'PGRST302', // Connection failed
+          '23505',    // Unique violation (pode ser temporário)
+          '40001',    // Serialization failure
+          '40P01',    // Deadlock detected
+          'ECONNRESET', // Connection reset
+          'ETIMEDOUT',  // Timeout
+          'ENOTFOUND',  // DNS lookup failed
+        ];
+        return retryableCodes.includes(error.code);
+      }
+
+      // Retry para erros de rede
+      if (error?.message) {
+        const retryableMessages = [
+          'network error',
+          'timeout',
+          'connection',
+          'fetch',
+          'aborted',
+          'failed to fetch',
+          'load failed',
+        ];
+        return retryableMessages.some(msg => 
+          error.message.toLowerCase().includes(msg)
+        );
+      }
+
+      // Retry para status HTTP específicos
+      if (error?.status) {
+        const retryableStatuses = [408, 429, 500, 502, 503, 504];
+        return retryableStatuses.includes(error.status);
+      }
+
+      return false;
+    },
+    onRetry: (error, attempt) => {
+      console.warn(`🔄 Tentativa ${attempt} falhou:`, error.message || error);
+    }
+  };
+
+  return retryWithBackoff(fn, { ...defaultOptions, ...customOptions });
 };
 
 // Cache para otimização de queries
@@ -67,12 +169,12 @@ class QueryCache {
   get(key: string) {
     const entry = this.cache.get(key);
     if (!entry) return null;
-    
+
     if (Date.now() - entry.timestamp > this.TTL) {
       this.cache.delete(key);
       return null;
     }
-    
+
     return entry.data;
   }
 
@@ -87,11 +189,11 @@ export function usePessoas() {
   const [loading, setLoading] = useState(true);
   const [updatingIds, setUpdatingIds] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
-  
+
   // Estados para otimização
   const [pendingUpdates, setPendingUpdates] = useState<Map<string, any>>(new Map());
   const [lastSyncTime, setLastSyncTime] = useState<number>(Date.now());
-  
+
   // Refs para controle
   const channelRef = useRef<any>(null);
   const mountedRef = useRef(true);
@@ -103,14 +205,14 @@ export function usePessoas() {
   // Função para buscar dados iniciais com cache
   const fetchInitialPessoas = useCallback(async (useCache = true) => {
     if (!mountedRef.current) return;
-    
+
     // Cancela requisição anterior se existir
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
-    
+
     abortControllerRef.current = new AbortController();
-    
+
     setLoading(true);
     setError(null);
 
@@ -126,32 +228,47 @@ export function usePessoas() {
         }
       }
 
-      const { data } = await retryWithBackoff(async () => {
+      const { data } = await retrySupabaseOperation(async () => {
         const result = await supabase
           .from(TABLE_NAME)
           .select('*')
           .order('id', { ascending: true })
           .abortSignal(abortControllerRef.current!.signal);
-        
+
         if (result.error) throw result.error;
         return result;
+      }, {
+        attempts: 5, // Mais tentativas para operação crítica
+        maxDelay: 15000,
+        onRetry: (error, attempt) => {
+          console.warn(`🔄 Recarregando dados - tentativa ${attempt}:`, error.message);
+          toast.loading(`Recarregando dados... (${attempt}/5)`, { 
+            id: 'retry-toast',
+            duration: 2000 
+          });
+        }
       });
 
       if (mountedRef.current && data) {
         setPessoas(data);
         cacheRef.current.set(cacheKey, data);
         setLastSyncTime(Date.now());
+        toast.dismiss('retry-toast');
+        toast.success('Dados carregados com sucesso!', { duration: 2000 });
       }
     } catch (err: any) {
       if (err.name === 'AbortError') return; // Requisição cancelada
-      
+
       const error = err as UseSupabaseError;
-      console.error('Erro ao buscar pessoas:', error);
-      
+      console.error('❌ Erro ao buscar pessoas:', error);
+
       if (mountedRef.current) {
         const errorMessage = error.message || 'Erro desconhecido';
         setError(errorMessage);
-        toast.error(`Não foi possível carregar os dados: ${errorMessage}`);
+        toast.dismiss('retry-toast');
+        toast.error(`Não foi possível carregar os dados: ${errorMessage}`, {
+          duration: 5000
+        });
       }
     } finally {
       if (mountedRef.current) {
@@ -163,45 +280,62 @@ export function usePessoas() {
   // Processamento em batch dos updates
   const processBatchUpdates = useCallback(async () => {
     if (processingRef.current || updateQueueRef.current.length === 0) return;
-    
+
     processingRef.current = true;
     const updates = [...updateQueueRef.current];
     updateQueueRef.current = [];
 
     try {
       // Agrupa updates por ID para otimizar
-      const groupedUpdates = updates.reduce((acc, update) => {
+      const groupedUpdates = updates.reduce((acc: Record<string, BatchUpdate>, update) => {
         const key = update.id.toString();
         if (!acc[key]) {
-          acc[key] = { id: update.id, fields: {} };
+          acc[key] = { id: update.id, fields: {} as Partial<Pessoa> };
         }
-        acc[key].fields[update.field] = update.value;
+        (acc[key].fields as Partial<Pessoa>)[update.field] = update.value as any;
         return acc;
       }, {} as Record<string, BatchUpdate>);
 
       // Processa em batches menores para evitar timeout
       const batches = Object.values(groupedUpdates);
       const batchSize = Math.min(MAX_BATCH_SIZE, batches.length);
-      
+
       for (let i = 0; i < batches.length; i += batchSize) {
         const batch = batches.slice(i, i + batchSize);
-        
+
         const promises = batch.map(({ id, fields }) =>
-          retryWithBackoff(() =>
+          retrySupabaseOperation(() =>
             supabase
               .from(TABLE_NAME)
               .update(fields)
               .eq('id', id)
+              .select(),
+            {
+              attempts: 3,
+              maxDelay: 8000,
+              onRetry: (error, attempt) => {
+                console.warn(`🔄 Retry update para ID ${id} - tentativa ${attempt}:`, error.message);
+                if (attempt === 1) {
+                  toast.loading(`Salvando alterações... (${attempt}/3)`, {
+                    id: `update-${id}`,
+                    duration: 1500
+                  });
+                }
+              }
+            }
           )
         );
 
         await Promise.all(promises);
-        
-        // Remove IDs do estado de updating
+
+        // Remove IDs do estado de updating e limpa toasts
         if (mountedRef.current) {
           setUpdatingIds(prev => {
             const newSet = new Set(prev);
-            batch.forEach(({ id }) => newSet.delete(id));
+            batch.forEach(({ id }) => {
+              newSet.delete(id);
+              toast.dismiss(`update-${id}`);
+            });
             return newSet;
           });
         }
@@ -209,18 +343,24 @@ export function usePessoas() {
 
       // Limpa cache após updates bem-sucedidos
       cacheRef.current.clear();
-      
+
     } catch (error) {
-      console.error('Batch update failed:', error);
-      
+      console.error('❌ Batch update failed after retries:', error);
+
       if (mountedRef.current) {
         // Remove todos os IDs do updating em caso de erro
-        setUpdatingIds(new Set());
-        
+        setUpdatingIds(prev => {
+          // Limpa todos os toasts de update
+          prev.forEach(id => toast.dismiss(`update-${id}`));
+          return new Set();
+        });
+
         // Reverte updates otimistas
         setPendingUpdates(new Map());
-        
-        toast.error('Falha ao processar atualizações em lote');
+
+        toast.error('Falha ao processar atualizações após várias tentativas', {
+          duration: 4000
+        });
       }
     } finally {
       processingRef.current = false;
@@ -276,6 +416,17 @@ export function usePessoas() {
           .forEach(key => newMap.delete(key));
         return newMap;
       });
+
+      // Remove do updating e limpa toast se existir
+      setUpdatingIds(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(newRecord.id)) {
+          newSet.delete(newRecord.id);
+          toast.dismiss(`update-${newRecord.id}`);
+          toast.success('Alteração salva!', { duration: 1500 });
+        }
+        return newSet;
+      });
     }
   }, [lastSyncTime]);
 
@@ -293,13 +444,17 @@ export function usePessoas() {
         handleRealtimeChange
       )
       .subscribe((status) => {
-        console.log('Status da subscription:', status);
-        
+        console.log('📡 Status da subscription:', status);
+
         if (status === 'SUBSCRIBED') {
-          console.log('Conectado ao realtime');
+          console.log('✅ Conectado ao realtime');
+          toast.success('Conectado em tempo real!', { duration: 2000 });
         } else if (status === 'CHANNEL_ERROR') {
-          console.error('Erro na conexão realtime');
-          toast.error('Erro na conexão em tempo real');
+          console.error('❌ Erro na conexão realtime');
+          toast.error('Erro na conexão em tempo real', { duration: 3000 });
+        } else if (status === 'TIMED_OUT') {
+          console.warn('⏰ Timeout na conexão realtime');
+          toast.warning('Timeout na conexão - tentando reconectar...', { duration: 3000 });
         }
       });
   }, [handleRealtimeChange]);
@@ -307,7 +462,7 @@ export function usePessoas() {
   // Effect principal
   useEffect(() => {
     mountedRef.current = true;
-    
+
     fetchInitialPessoas();
     setupRealtimeSubscription();
 
@@ -318,19 +473,22 @@ export function usePessoas() {
 
     return () => {
       mountedRef.current = false;
-      
+
       // Cleanup
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
         channelRef.current = null;
       }
-      
+
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
-      
+
       clearInterval(cacheCleanupInterval);
       debouncedBatchProcessor.cancel();
+
+      // Limpa todos os toasts pendentes
+      toast.dismiss();
     };
   }, [fetchInitialPessoas, setupRealtimeSubscription, debouncedBatchProcessor]);
 
@@ -345,7 +503,7 @@ export function usePessoas() {
     // Update otimista imediato na UI
     const key = `${id}-${field}`;
     setPendingUpdates(prev => new Map(prev).set(key, value));
-    
+
     setPessoas(prev => prev.map(p => 
       p.id === id ? { ...p, [field]: value } : p
     ));
@@ -394,16 +552,24 @@ export function usePessoas() {
   // Função de retry otimizada
   const retry = useCallback(() => {
     cacheRef.current.clear();
+    toast.loading('Recarregando dados...', { id: 'manual-retry' });
     fetchInitialPessoas(false); // Force refresh sem cache
   }, [fetchInitialPessoas]);
 
   // Função para forçar sincronização
   const forceSync = useCallback(async () => {
-    if (updateQueueRef.current.length > 0) {
-      debouncedBatchProcessor.cancel();
-      await processBatchUpdates();
+    toast.loading('Sincronizando...', { id: 'force-sync' });
+
+    try {
+      if (updateQueueRef.current.length > 0) {
+        debouncedBatchProcessor.cancel();
+        await processBatchUpdates();
+      }
+      await fetchInitialPessoas(false);
+      toast.success('Sincronização concluída!', { id: 'force-sync' });
+    } catch (error) {
+      toast.error('Erro na sincronização', { id: 'force-sync' });
     }
-    await fetchInitialPessoas(false);
   }, [debouncedBatchProcessor, processBatchUpdates, fetchInitialPessoas]);
 
   // Função para obter valor com pending updates
@@ -419,6 +585,8 @@ export function usePessoas() {
     updatingIds: updatingIds.size,
     queuedUpdates: updateQueueRef.current.length,
     isProcessing: processingRef.current,
+    cacheSize: cacheRef.current ? 1 : 0, // Simplified cache size
+    lastSyncTime: new Date(lastSyncTime).toLocaleTimeString(),
   };
 
   return { 
@@ -439,10 +607,10 @@ export function usePessoas() {
 // Hook auxiliar para usar com a tabela virtualizada
 export function usePessoasVirtualized() {
   const hook = usePessoas();
-  
+
   // Memoiza os dados para a tabela virtualizada
   const memoizedPessoas = hook.pessoas;
-  
+
   return {
     ...hook,
     pessoas: memoizedPessoas,

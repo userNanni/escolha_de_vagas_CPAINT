@@ -88,7 +88,7 @@ function App() {
     const { data, error } = await supabase
       .from(TABLES.VAGAS_STATUS)
       .select("om, estado, total_vagas, chosen")
-      .order("estado", { ascending: true })
+      .order("om", { ascending: true })
       .order("chosen", { ascending: false });
 
     if (error) {
@@ -293,7 +293,7 @@ function App() {
         type="select-single"
         disableClick
         disableHover
-        selectColor="#000050"
+        selectColor="#000080"
         toSelect={state.lastShownState}
       />
     ),
@@ -318,9 +318,9 @@ function App() {
 
       <div className="flex flex-col w-full max-w-2xl justify-self-center gap-8">
         <div>
-          <h2 className="text-2xl font-bold text-white text-center mb-4">
+          {/* <h2 className="text-2xl font-bold text-white text-center mb-4">
             Quadro de Vagas
-          </h2>
+          </h2> */}
           <VagasTable data={state.vagasStatus} isLoading={false} />
         </div>
       </div>

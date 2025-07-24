@@ -6,8 +6,8 @@ import { cn } from "@/lib/utils";
 // Componente compacto para OM
 const OMCell = memo(({ om, isComplete }: { om: string; isComplete: boolean }) => (
   <div className={cn(
-    "text-center font-medium text-sm py-1",
-    isComplete ? "text-red-600 font-bold" : "text-slate-700"
+    "text-center font-bold text-xl py-1",
+    isComplete ? "text-red-600 font-semibold" : "text-slate-700"
   )}>
     {om}
   </div>
@@ -18,8 +18,8 @@ OMCell.displayName = 'OMCell';
 // Componente compacto para números
 const NumberCell = memo(({ value, isComplete }: { value: number; isComplete: boolean }) => (
   <div className={cn(
-    "text-center font-medium text-sm py-1",
-    isComplete ? "text-red-600 font-bold" : "text-slate-700"
+    "text-center font-bold text-xl py-1",
+    isComplete ? "text-red-600 font-semibold" : "text-slate-700"
   )}>
     {value}
   </div>
@@ -47,7 +47,7 @@ StatusCell.displayName = 'StatusCell';
 export const columns: ColumnDef<Escolha>[] = [
   {
     accessorKey: "OM",
-    header: () => <div className="text-center font-semibold text-sm">OM</div>,
+    header: () => <div className="text-center font-semibold text-2xl">OM</div>,
     cell: ({ row }) => {
       const om = row.getValue("OM") as string;
       const chosen = row.getValue("chosen") as number;
@@ -60,7 +60,7 @@ export const columns: ColumnDef<Escolha>[] = [
   },
   {
     accessorKey: "chosen",
-    header: () => <div className="text-center font-semibold text-sm">Escolhidos</div>,
+    header: () => <div className="text-center font-semibold text-2xl">Escolhidos</div>,
     cell: ({ row }) => {
       const chosen = row.getValue("chosen") as number;
       const total = row.getValue("total") as number;
@@ -72,7 +72,7 @@ export const columns: ColumnDef<Escolha>[] = [
   },
   {
     accessorKey: "total",
-    header: () => <div className="text-center font-semibold text-sm">Vagas</div>,
+    header: () => <div className="text-center font-semibold text-2xl">Vagas</div>,
     cell: ({ row }) => {
       const chosen = row.getValue("chosen") as number;
       const total = row.getValue("total") as number;
@@ -84,7 +84,7 @@ export const columns: ColumnDef<Escolha>[] = [
   },
   {
     id: "status",
-    header: () => <div className="text-center font-semibold text-sm">•</div>,
+    header: () => <div className="text-center font-semibold text-2xl">•</div>,
     cell: ({ row }) => {
       const chosen = row.getValue("chosen") as number;
       const total = row.getValue("total") as number;
